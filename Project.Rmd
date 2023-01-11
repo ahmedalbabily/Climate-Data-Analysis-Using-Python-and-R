@@ -1,0 +1,168 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+# Import Necessary Libraries
+library(lubridate)
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(astsa)
+library(forecast)
+library(readxl)
+library(urca)
+library(ggfortify)
+library(tsutils)
+
+# Import Data
+point_data <- read_excel("../point_data.xlsx")
+
+#Converting To Time Series
+point_data_ts <- ts(data = point_data$value, start = 1901, frequency = 12)
+
+#printing the time series
+point_data_ts
+
+```
+
+```{r}
+#Plot Time Series Data
+autoplot(point_data_ts) + ylab("Rainfall (mm2)") + xlab("Datetime") + 
+  scale_x_date(date_labels = '%b - %Y', breaks = '1 year', minor_breaks = '2 month') +
+  theme_bw() + ggtitle("Nile Delta Rainfall 1901-2020")
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+```{r}
+#Decomposition using stl()
+decomp <- stl(point_data_ts, s.window = 'periodic')
+#Plot decomposition
+autoplot(decomp) + theme_bw() + scale_x_date(date_labels = '%b - %Y', breaks = '1 year', minor_breaks = '2 month') +
+    ggtitle("Remainder")
+```
+
+```{r}
+Tt <- trendcycle(decomp)
+St <- seasonal(decomp)
+Rt <- remainder(decomp)
+#Trend Strength Calculation
+Ft <- round(max(0,1 - (var(Rt)/var(Tt + Rt))),1)
+#Seasonal Strength Calculation
+Fs <- round(max(0,1 - (var(Rt)/var(St + Rt))),1)
+
+data.frame('Trend Strength' = Ft , 'Seasonal Strength' = Fs)
+
+
+#Seasonal Plot
+seasonplot(point_data_ts, year.labels = TRUE, col = 1:13, 
+   main =  "Seasonal Plot", ylab= "Rainfall (mm)")
+```
+```{r}
+#Seasonal Sub-Series Plot
+seasplot(point_data_ts, outplot = 3, trend = FALSE, 
+      main = "Seasonal Subseries Plot", ylab= "Rainfall (mm)")
+#Seasonal Boxplot
+seasplot(point_data_ts, outplot = 2, trend = FALSE, 
+     main = "Seasonal Box Plot", ylab= "Rainfall (mm)")
+```
+
+```{r}
+#Create Train Set
+data_train <- window(point_data_ts, end = c(2000,12))
+#Create Test Set 
+data_test <- window(point_data_ts, start = c(2001,1))
+```
+
+```{r}
+acf2(data_train)
+
+```
+
+```{r}
+fit1 <- Arima(data_train, order = c(1,0,2), seasonal = c(1,0,2))
+fit2 <- Arima(data_train, order = c(2,0,2), seasonal = c(2,0,2))
+fit3 <- Arima(data_train, order = c(1,0,1), seasonal = c(1,0,1))
+fit5 <- Arima(data_train, order = c(0,0,2), seasonal = c(0,0,2))
+fit6 <- auto.arima(data_train, stepwise = FALSE, 
+        approximation = FALSE)
+```
+```{r}
+fit4 <- Arima(data_train, order = c(2,0,1), seasonal = c(2,0,1),method="CSS")
+
+```
+
+```{r}
+data.frame('Model-1' = fit1$aicc, 'Model-2' = fit2$aicc, 
+     'Model-3' = fit3$aicc,
+     'Model-4' = fit4$aicc, 
+     'Model-5' =  fit5$aicc,'Auto.Arima'= fit6$aicc,
+      row.names =   "AICc Value")
+```
+```{r}
+checkresiduals(fit3)
+
+```
+
+```{r}
+fit_ets <- ets(data_train, damped =TRUE)
+checkresiduals(fit_ets)
+
+```
+
+```{r}
+#Modifying Data For ggplot
+model_1 <- forecast(fit3, h=12) 
+model_ets <- forecast(fit_ets, h=12)
+
+model_1 <- as.data.frame(model_1$mean)
+model_ets <- as.data.frame(model_ets$mean)
+
+colnames(model_1) <- "Curah_Hujan"
+colnames(model_ets) <- "Curah_Hujan"
+data_train_df <- as.data.frame(data_train)
+colnames(data_train_df) <- colnames(model_ets)
+data_train_df <- as.data.frame(data_train_df)
+
+model_1_plot <- rbind(data_train_df,model_1)
+model_ets_plot <- rbind(data_train_df, model_ets)
+
+model_1_plot <- model_1_plot %>% 
+  mutate('Date' = seq(from = as.Date("1901-01-01", '%Y-%m-%d'), to = as.Date("2020-12-31",'%Y-%m-%d'),by = 'month'))
+
+model_ets_plot <- model_ets_plot %>% 
+  mutate('Date' = seq(from = as.Date("1901-01-01", '%Y-%m-%d'), to = as.Date("2020-12-31",'%Y-%m-%d'),by = 'month'))
+
+point_data_ts_df <- as.data.frame(point_data_ts)
+
+point_data_ts_df <- point_data_ts_df %>% 
+  mutate('Date' = seq(from = as.Date("1901-01-01", '%Y-%m-%d'), to = as.Date("2020-12-31",'%Y-%m-%d'),by = 'month'))
+
+data_train_df <- data_train_df %>% 
+  mutate('Date' = seq(from = as.Date("1901-01-01", '%Y-%m-%d'), to = as.Date("2000-12-31",'%Y-%m-%d'),by = 'month'))
+
+colors <- c("ARIMA Model Forecast 2018" = "blue", "ETS Model Forecast 2018" = "red", "Actual Data" = "black")
+
+
+#Creating Plot
+ggplot() + geom_line(model_1_plot,
+   mapping = aes(x=Date, y=Curah_Hujan, 
+   color= "ARIMA Model Forecast 2018"),lty = 2) +
+  geom_line(model_ets_plot,
+  mapping = aes(x=Date, y=Curah_Hujan, 
+  color= "ETS Model Forecast 2018"),lty= 2) +
+  geom_line(hujan_ts_df,mapping = aes(x=Date, y=Curah_Hujan, 
+  color= "Actual Data"), lty = 1, show.legend = TRUE) +
+  ylab("Rainfall (mm2)") + xlab("Datetime") + 
+  scale_x_date(date_labels = '%b - %Y', breaks = '1 year', 
+  minor_breaks = '2 month') +
+  theme_bw() + ggtitle("Banten Rainfall 2006 - 2018") + 
+  scale_color_manual(values=colors)
+
+```
+
